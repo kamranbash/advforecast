@@ -1,0 +1,159 @@
+import streamlit as st
+
+import openai
+
+import pandas as pd
+
+import matplotlib.pyplot as plt
+
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+from prophet import Prophet
+
+from io import BytesIO
+
+ 
+
+# OpenAI API Key (Set your API key here)
+
+OPENAI_API_KEY = "your_openai_api_key"
+
+openai.api_key = OPENAI_API_KEY
+
+ 
+
+def load_data(uploaded_file):
+
+    df = pd.read_excel(uploaded_file, sheet_name=0)
+
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    df.set_index('Date', inplace=True)
+
+    return df
+
+ 
+
+def forecast_sarima(data):
+
+    model = SARIMAX(data, order=(1,1,1), seasonal_order=(1,1,1,12))
+
+    result = model.fit()
+
+    forecast = result.get_forecast(steps=12).predicted_mean
+
+    return forecast
+
+ 
+
+def forecast_prophet(data):
+
+    df_prophet = data.reset_index().rename(columns={'Date': 'ds', 'Revenue': 'y'})
+
+    model = Prophet()
+
+    model.fit(df_prophet)
+
+    future = model.make_future_dataframe(periods=12, freq='M')
+
+    forecast = model.predict(future)
+
+    return forecast.set_index('ds')['yhat'][-12:]
+
+ 
+
+def forecast_moving_average(data):
+
+    return data.rolling(window=3).mean().iloc[-12:]
+
+ 
+
+def generate_commentary(forecast):
+
+    prompt = f"""Analyze the following sales forecast and provide insights:
+
+    {forecast.to_string()}
+
+    """
+
+    response = openai.ChatCompletion.create(
+
+        model="gpt-4",
+
+        messages=[{"role": "system", "content": "You are a financial analyst."},
+
+                  {"role": "user", "content": prompt}]
+
+    )
+
+    return response['choices'][0]['message']['content']
+
+ 
+
+def export_to_excel(forecasts):
+
+    output = BytesIO()
+
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+
+        for name, forecast in forecasts.items():
+
+            forecast.to_excel(writer, sheet_name=name)
+
+    output.seek(0)
+
+    return output
+
+ 
+
+st.title("AI-Powered Sales Forecasting Agent")
+
+uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx"])
+
+ 
+
+if uploaded_file:
+
+    df = load_data(uploaded_file)
+
+    monthly_data = df['Revenue'].resample('M').sum()
+
+   
+
+    sarima_forecast = forecast_sarima(monthly_data)
+
+    prophet_forecast = forecast_prophet(monthly_data)
+
+    moving_avg_forecast = forecast_moving_average(monthly_data)
+
+   
+
+    forecasts = {
+
+        "SARIMA": sarima_forecast,
+
+        "Prophet": prophet_forecast,
+
+        "Moving Average": moving_avg_forecast
+
+    }
+
+   
+
+    forecast_df = pd.DataFrame(forecasts)
+
+    st.line_chart(forecast_df)
+
+   
+
+    commentary = generate_commentary(forecast_df)
+
+    st.subheader("AI Commentary")
+
+    st.write(commentary)
+
+   
+
+    excel_data = export_to_excel(forecasts)
+
+    st.download_button(label="Download Forecast", data=excel_data, file_name="sales_forecast.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
